@@ -215,301 +215,287 @@ def datetime_from_apache(instr):
 
 
 def basic_split(line):
-      """ Currently considers CLF and vhost-CLF:
-            %h %l %u %t \"%r\" %>s %b
-            %v %h %l %u %t \"%r\" %>s %b
-          Robust to more things at the end (extended, and some others) - it ignores them.
-            (should be okay with vhost-combined?)        
+    """ Currently considers CLF and vhost-CLF, basically:
+         %h %l %u %t "%r" %>s %b
+         %v %h %l %u %t "%r" %>s %b
+        Robust to more things at the end (extended, and some others) - it ignores them.
+          (should be okay with vhost-combined?)
+          
+        Logic is currently a bit hackish, and fails on some nasty input.
+        Be prepared to catch and ignore... ValueError, mostly.
 
-          Logic is currently a bit hackish, and fails on some nasty input.
-          Be prepared to catch and ignore... ValueError, mostly.
+        Returns a dict like:
+          {'status': '200', 'httpversion': 'HTTP/1.1', 'firstline': 'GET / HTTP/1.1', 'referrer': '-',
+                'agent': 'Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)',
+                'vhost': 'qw.scarfboy.com', 'client': '66.249.78.238',
+                'path': '/', 'rusername': '-', 'method': 'GET', 'sentbytes': '41', 'rlogname': '-',
+                'datetime': '10/May/2013:15:56:59 +0200',
+                'utcdto': datetime.datetime(2013, 5, 10, 13, 56, 59)
+          }
+    """
+    ret = {'vhost':'(default)'} # makes sure vhost is a present key
+    ll = list(v for v in regex_logsplit.split(line) if v not in (None,''))
+    try:
+        #guess which field is which
+        if len(ll)<5:
+            # bad line?
+            return None
 
-          Returns in a dict, like:
-            {'status': '200', 'httpversion': 'HTTP/1.1', 'firstline': 'GET / HTTP/1.1', 'referrer': '-',
-                  'agent': 'Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)',
-                  'vhost': 'qw.scarfboy.com', 'client': '66.249.78.238',
-                  'path': '/', 'rusername': '-', 'method': 'GET', 'sentbytes': '41', 'rlogname': '-',
-                  'datetime': '10/May/2013:15:56:59 +0200',
-                  'utcdto': datetime.datetime(2013, 5, 10, 13, 56, 59)
-            }
-      """
-      ret = {'vhost':'(default)'} # makes sure vhost is a present key
-      ll = list(v for v in regex_logsplit.split(line) if v not in (None,''))
-      try:
-            #guess which field is which
-            if len(ll)<5:
-                # bad line?
-                return None
+        # %b bytes transmitted, excluding headers, zero as -
+        # %B bytes transmitted, excluding headers, zero as 0
+        # %O bytes transmitted, including headers
 
-            # %b bytes transmitted, excluding headers, zero as -
-            # %B bytes transmitted, excluding headers, zero as 0
-            # %O bytes transmitted, including headers
-
-            # TODO: properly consider all the alternative formats 
-            #  http://publib.boulder.ibm.com/iseries/v5r2/ic2924/info/rzaie/rzaielogformat.htm
-            # LogFormat "%v:%p %h %l %u %t \"%r\" %>s %O \"%{Referer}i\" \"%{User-Agent}i\"" vhost_combined
-            # LogFormat       "%h %l %u %t \"%r\" %>s %O \"%{Referer}i\" \"%{User-Agent}i\"" combined
-            #                 "%h %l %u %t \"%r\" %>s %b \"%{Referer}i\" \"%{User-agent}i\" extended
-            #
-            # LogFormat       "%h %l %u %t \"%r\" %>s %O" common
-            #                 "%h %l %u %t \"%r\" %>s %b"
-            # # my own
-            # LogFormat    "%v %h %l %u %t \"%r\" %>s %b" vhost
+        # TODO: properly consider all the alternative formats 
+        #  http://publib.boulder.ibm.com/iseries/v5r2/ic2924/info/rzaie/rzaielogformat.htm
+        # LogFormat "%v:%p %h %l %u %t \"%r\" %>s %O \"%{Referer}i\" \"%{User-Agent}i\"" vhost_combined
+        # LogFormat       "%h %l %u %t \"%r\" %>s %O \"%{Referer}i\" \"%{User-Agent}i\"" combined
+        #                 "%h %l %u %t \"%r\" %>s %b \"%{Referer}i\" \"%{User-agent}i\" extended
+        #
+        # LogFormat       "%h %l %u %t \"%r\" %>s %O" common
+        #                 "%h %l %u %t \"%r\" %>s %b"
+        # # my own
+        # LogFormat    "%v %h %l %u %t \"%r\" %>s %b" vhost
         
+        # Yes, this is overly verbose
+        if ll[4].count('/')==2  and  ll[4].count(':')==3:  #then it's probably the date, and CLF+vhost
+            #print 'probably CLF+vhost, ll[4] is %s'%ll[4]
+            ret['vhost']     = ll[0]
+            ret['client']    = ll[1]
+            ret['rlogname']  = ll[2]
+            ret['rusername'] = ll[3]
+            ret['datetime']  = ll[4]
+            ret['firstline'] = ll[5] # method, path, HTTP; split below
+            ret['status']    = ll[6]
+            ret['sentbytes'] = ll[7]
+            rest = ll[8:]
 
-            if ll[4].count('/')==2  and  ll[4].count(':')==3:  #then it's probably the date, and CLF+vhost
-                  #print 'probably CLF+vhost, ll[4] is %s'%ll[4]
-                  ret['vhost']     = ll[0]
-                  ret['client']    = ll[1]
-                  ret['rlogname']  = ll[2]
-                  ret['rusername'] = ll[3]
-                  ret['datetime']  = ll[4]
-                  ret['firstline'] = ll[5] # method, path, HTTP; split below
-                  ret['status']    = ll[6]
-                  ret['sentbytes'] = ll[7]
-                  rest = ll[8:]
+        elif ll[3].count('/')==2  and  ll[3].count(':')==3:  #then it's probably the date, and probably CLF
+            #print 'probably CLF, ll[3] is %s'%ll[3]
+            #print `ll`
+            ret['client']    = ll[0]
+            ret['rlogname']  = ll[1]
+            ret['rusername'] = ll[2]
+            ret['datetime']  = ll[3]
+            ret['firstline'] = ll[4] # method, path, HTTP; split below
+            ret['status']    = ll[5]
+            ret['sentbytes'] = ll[6]
+            rest = ll[7:]
+        else:
+             return None
 
-            elif ll[3].count('/')==2  and  ll[3].count(':')==3:  #then it's probably the date, and probably CLF
-                  #print 'probably CLF, ll[3] is %s'%ll[3]
-                  #print `ll`
-                  ret['client']    = ll[0]
-                  ret['rlogname']  = ll[1]
-                  ret['rusername'] = ll[2]
-                  ret['datetime']  = ll[3]
-                  ret['firstline'] = ll[4] # method, path, HTTP; split below
-                  ret['status']    = ll[5]
-                  ret['sentbytes'] = ll[6]
-                  rest = ll[7:]
-            else:
-                  return None
-
-            if ret['sentbytes'] == '-':
-                ret['sentbytes'] = 0
-            else:
-                ret['sentbytes'] = int(ret['sentbytes'])
+        if ret['sentbytes'] == '-':
+            ret['sentbytes'] = 0
+        else:
+            ret['sentbytes'] = int(ret['sentbytes'])
 
                                   
-            #This could fail on
-            try:
+        #This could fail on
+        try:
                   ret['method'],ret['path'],ret['httpversion'] = ret['firstline'].split(' ')
-            except ValueError: # invalid request line. Still show something
+        except ValueError: # invalid request line. Still show something:
                   ret['method'],ret['httpversion']='(BAD)',''
                   ret['path'] = ret['firstline']
                   print line
                   #raise
 
-            if len(rest)>=1:
-                  # The rest are probably referrer and agent
-                  ret['referrer'] = rest[0]
-                  ret['agent']=''
-                  if len(rest)>=2:
-                        ret['agent'] = rest[1]
+        if len(rest)>=1:
+             # The rest are probably referrer and agent
+             ret['referrer'] = rest[0]
+             ret['agent']=''
+             if len(rest)>=2:
+                 ret['agent'] = rest[1]
             
-            # parse datetime string
-            if 'datetime' in ret: # assumes it's something like '12/May/2013:13:54:02 +0200'
-                  try:
-                        dt = ret['datetime']
-                        dto = datetime_from_apache(dt)                        
-                        ret['utcdto']=dto
-                  except ValueError, e:
-                        raise
-                        print e
-                        ret['utcdto']=None
-            return ret
-      except (KeyError,ValueError), e:
-
-            print "ERROR WITH:"
-            print `line`
-            print `ll`
-            raise
-            #return None
+        # parse datetime string
+        if 'datetime' in ret: # assumes it's something like '12/May/2013:13:54:02 +0200'
+            try:
+                dt = ret['datetime']
+                dto = datetime_from_apache(dt)                        
+                ret['utcdto']=dto
+            except ValueError, e:
+                raise
+                print e
+                ret['utcdto']=None
+        return ret
+      
+    except (KeyError,ValueError), e:
+        print "ERROR WITH:"
+        print `line`
+        print `ll`
+        raise
 
 
 
 def format_line(parts):
-      ''' Returns a reformatted string - the thing we want to print -
-          based on the parsed dict
+    ''' Returns a reformatted string - the thing we want to print -
+        based on the parsed dict
 
-          The time is taken from the string.
-          TODO: consider allowing use of the UTC time (in dto) instead?
-      '''      
-      status = parts['status']
+        The time is taken from the string.
+        TODO: consider allowing use of the UTC time (in dto) instead?
+    '''      
+    status = parts['status']
       
-      color1=DEFAULT
-      if status[0] in '4':
-            color1=RED
-      elif status[0] in '5':
-            color1=BRIGHTRED
-      elif status in ('301','302','303','307'): #redirects
-            color1=YELLOW
-      elif status in ('304',): #Cache
-            color1=BRIGHTGREEN
-      elif status[0] in '2':
-            color1=GREEN
-      color2=NOCOLOR+DEFAULT
+    color1=DEFAULT
+    if status[0] in '4':
+        color1=RED
+    elif status[0] in '5':
+        color1=BRIGHTRED
+    elif status in ('301','302','303','307'): #redirects
+        color1=YELLOW
+    elif status in ('304',): #Cache
+        color1=BRIGHTGREEN
+    elif status[0] in '2':
+        color1=GREEN
+    color2=NOCOLOR+DEFAULT
 
-      #print `parts`
-      #print parts['datetime']
-      tt = parts['datetime'].split(' ')[0].split(':',1)[1]
-      h,m,s=tt.split(':')
+    tt = parts['datetime'].split(' ')[0].split(':',1)[1]
+    h,m,s = tt.split(':')
 
-      # Make script path more noticeable than the arguments
-      path = parts['path']
+    # Make script path more noticeable than the arguments
+    path = parts['path']
 
-      cols_to_spare = termcols - 60 # see the formatting below.
-      if len(path)>cols_to_spare:
-            path=path[:cols_to_spare]#+'...'
-            path=path[:cols_to_spare-3]+'...'            
-      l=path.split('?',1)
-      if len(l)==2:
-            path = BRIGHT+l[0]+NOCOLOR+DEFAULT+GREY+'?'+l[1]+DEFAULT
-      else:
-            path = BRIGHT+l[0]+NOCOLOR+DEFAULT
-
-      # Basic check for common spiders
-      ifbot=''
-      #spider=False
-      agent_s = ''
-      if 'agent' in parts:
-          agent_s = parts['agent'].lower()
-          if ('baidu'     in agent_s or
-              'bingbot'   in agent_s or
-              'googlebot' in agent_s or
-              'spider' in agent_s or
-              'crawl' in agent_s or
-              'robot' in agent_s or
-              'bot.php' in agent_s or
-              '_bot' in agent_s
-              ):
-                #spider=True
-                ifbot=YELLOW+'(spdr)'+DEFAULT    #(crwl)
+    cols_to_spare = termcols - 60 # see the formatting below.
+    if len(path)>cols_to_spare:
+        path = path[:cols_to_spare]#+'...'
+        path = path[:cols_to_spare-3]+'...'            
+    l = path.split('?',1)
+    if len(l) == 2:
+        path = BRIGHT+l[0]+NOCOLOR+DEFAULT+GREY+'?'+l[1]+DEFAULT
+    else:
+        path = BRIGHT+l[0]+NOCOLOR+DEFAULT
+          
+    # Basic check for common spiders
+    ifbot=''
+    agent_s = ''
+    if 'agent' in parts:
+        agent_s = parts['agent'].lower()
+        if ('baidu'     in agent_s or
+            'bingbot'   in agent_s or
+            'googlebot' in agent_s or
+            'spider'    in agent_s or
+            'crawl'     in agent_s or
+            'robot'     in agent_s or
+            'bot.php'   in agent_s or
+            '_bot'      in agent_s
+           ):
+            ifbot=YELLOW+'(spdr)'+DEFAULT    #(crwl)
             
-      client = parts['client']
-      if len(client)>18:
-            client=client[:15]+'...'  # inform that we've truncated
+    client = parts['client']
+    if len(client)>18:
+        client=client[:15]+'...'  # inform that we've truncated
 
-      vhost = parts['vhost']
-      for strip_domain in strip_domains:
-            #print "Matching against ",strip_domain
-            if vhost.endswith(strip_domain):
-                  #print "Y - Matching against ",strip_domain
-                  vhost = vhost[:-len(strip_domain)] # maybe special case for www?
-      if len(vhost)>10:
-            if '.' in vhost:
-                vhost = vhost[:vhost.index('.')]
-             #vhost=vhost[:7]+'...'
-            vhost=vhost[:10]
+    vhost = parts['vhost']
+    for strip_domain in strip_domains:
+        #print "Matching against ",strip_domain
+        if vhost.endswith(strip_domain):
+            #print "Y - Matching against ",strip_domain
+            vhost = vhost[:-len(strip_domain)] # maybe special case for www?
+    if len(vhost)>10:
+        if '.' in vhost:
+            vhost = vhost[:vhost.index('.')]
+            #vhost=vhost[:7]+'...'
+        vhost = vhost[:10]
             
-      method = parts['method']
+    method = parts['method']
 
-      methodcolor=''
-      if method in ('GET',):
-            methodcolor=BRIGHT+BLACK
+    methodcolor=''
+    if method in ('GET',):
+        methodcolor=BRIGHT+BLACK            
 
-      pr = '%s%18s%6s   %10s   %s%3s%s %s%8s%s %10s  %s%s'%(
-            DEFAULT,client,ifbot,'%s:%s(:%ss)'%(h,m,s), color1,status,color2, methodcolor,method,DEFAULT, vhost, path,DEFAULT
-      )
-      #if len(pr)-len(color1)-len(color2)>termcols:
-      #      ret= pr[:termcols-4]+'...'
-      #else:
-      ret=pr
-      return ret
+            
+    ret = '%s%18s%6s   %10s   %s%3s%s %s%8s%s %10s  %s%s'%(
+        DEFAULT,client,ifbot,'%s:%s(:%ss)'%(h,m,s), color1,status,color2, methodcolor,method,DEFAULT, vhost, path,DEFAULT
+    )      
+    return ret
 
 
 def stdin_forever():
-      #print "Starting to work on stdin"
-      thc=999 # trigger header when starting off
-      while True:
-            line = sys.stdin.readline().rstrip('\n\r ')
-            try:
-                  parts = basic_split(line)
-            except ValueError, e:
-                  print e
-                  continue
-            #print
-            #print line
-            #print parts
-            if parts==None:
-                  print "Couldn't parse logline: %s"%line 
-                  continue
-            else:
-                  if parts['utcdto']!=None:
-                        ago = datetime.datetime.utcnow() - parts['utcdto']
-                        #print 'utcnow:',datetime.datetime.utcnow()
-                        #print 'utcdto:',parts['utcdto']
-                        minutes_ago = ( ago.days*1440.) + (ago.seconds/60.) 
-                        #print 'minutes_ago:', int( minutes_ago )
-
-                        if minutes_ago>max_age_mins: # old logline
-                              continue
+    #sys.stderr.write( 'Starting to work on stdin' )
+    #sys.stderr.flush()
+    thc = 999 # trigger header when starting off
+    while True:
+          line = sys.stdin.readline().rstrip('\n\r ')
+          try:
+              parts = basic_split(line)
+          except ValueError, e:
+              print e
+              continue
+             
+          if parts==None:
+              print "Couldn't parse logline: %s"%line 
+              continue
+          else:
+              if parts['utcdto']!=None:
+                  ago = datetime.datetime.utcnow() - parts['utcdto']
+                  minutes_ago = ( ago.days*1440.) + (ago.seconds/60.) 
+                  if minutes_ago > max_age_mins: # old logline
+                      continue
                   
-                  fline = format_line( parts )
-                  if fline!=None:
-                        thc+=1
-                        if thc>23:
-                              header = "----------- Client ------------- Time - Stat - Method ---- Vhost - Path ----"
-                              header+= '-'*(termcols-len(header))
-                              print header
-                              thc=0
-                        print fline
-                  else:
-                        print "Don't know how to reformat line %r"%line
+              fline = format_line( parts )
+              if fline != None:
+                  thc += 1
+                  if thc > 23:
+                      header  = "----------- Client ------------- Time - Stat - Method ---- Vhost - Path ----"
+                      header += '-'*(termcols-len(header))
+                      print header
+                      thc = 0
+                  print fline
+              else:
+                  print "Don't know how to reformat line %r"%line
                         
-                  sys.stdout.flush()
+              sys.stdout.flush()
                   
 
 
 if __name__ == '__main__':      
-      print DEFAULT
+    print DEFAULT
 
-      if sys.stdin.isatty():
-            # We were invoked directly, not via a pipe - invoking tail and piping its output to another copy of ourself.
-            # we accept one argument, the log file to follow (defaults to apache's default path)
+    if sys.stdin.isatty():
+          # We were invoked directly, not via a pipe - invoking tail and piping its output to another copy of ourself.
+          # we accept one argument, the log file to follow (defaults to apache's default path)
+          
+          # This could stand improvement. Take code from follow-?
+          logfns=[]
+          for lookin in lookins:
+              for potential_log_fn in os.listdir(lookin):
+                  if (not potential_log_fn.endswith('.gz') and not potential_log_fn.endswith('.bz2')) and (
+                       'access' in potential_log_fn  or ('.log' in potential_log_fn and 'error' not in potential_log_fn
+                      )):
+                      logfns.append( '/var/log/apache2/%s'%potential_log_fn)
 
-            # This could stand improvement. Take code from follow-?
-            logfns=[]
-            for lookin in lookins:
-                  for potential_log_fn in os.listdir(lookin):
-                        if (not potential_log_fn.endswith('.gz') and not potential_log_fn.endswith('.bz2')) and (
-                                'access' in potential_log_fn  or ('.log' in potential_log_fn and 'error' not in potential_log_fn
-                            )):
-                            logfns.append( '/var/log/apache2/%s'%potential_log_fn)
-
-            # add any mentioned ones.
-            if len(sys.argv)>1:
-                  logfns = [sys.argv[1:]]
+          # add any mentioned ones.
+          if len(sys.argv)>1:
+              logfns = [sys.argv[1:]]
                   
-            print "Starting to follow %s"%(' '.join(logfns))
+          print "Starting to follow %s"%(' '.join(logfns))
             
-            try:
-                  try:
-                        # call tail, and a copy of ourselves that does the actual printing work                                                
-                        tail_command = ['tail','-q','-F']+logfns
-                        subp1 = subprocess.Popen(tail_command, stdout=subprocess.PIPE, shell=False, bufsize=0)
-                        ourself = sys.argv[0]
-                        subp2 = subprocess.Popen([ourself], stdin=subp1.stdout, stdout=subprocess.PIPE, shell=False)  
-                        while True:
-                              # While the other copy of ourself hasn't closed ('' as stream EOF)
-                              line = subp2.stdout.readline()
-                              #if len(line)==0:
-                              #      continue
-                              sys.stdout.write(line) # ...print its lines.
-                              sys.stdout.flush() #maybe flush only occasionally?
-                              
-                  except KeyboardInterrupt:
-                        print " Breaking off..."
-                        pass
-            finally:
-                  # Wait for subprocesses to finish
-                  subp2.wait() # the other copy of ourselves
-                  subp1.wait() # tail
-
-      else: # Something is piping to us (probably another copy of ourself)
-            #print "(Invoked with pipe; formatting stdin lines)"
-            print "Ignoring lines older than %d minutes  (assumes your timezone info is accurate)"%max_age_mins
-            print      
-            try:
-                  stdin_forever()
-            except KeyboardInterrupt:
+          try:
+              try:
+                  # call tail, and a copy of ourselves that does the actual printing work                                                
+                  tail_command = ['tail','-q','-F']+logfns
+                  subp1 = subprocess.Popen(tail_command, stdout=subprocess.PIPE, shell=False, bufsize=0)
+                  ourself = sys.argv[0]
+                  subp2 = subprocess.Popen([ourself], stdin=subp1.stdout, stdout=subprocess.PIPE, shell=False)  
+                  while True:
+                      # While the other copy of ourself hasn't closed ('' as stream EOF)
+                      line = subp2.stdout.readline()
+                      #if len(line)==0:
+                      #      continue
+                      sys.stdout.write(line) # ...print its lines.
+                      sys.stdout.flush() #maybe flush only occasionally?                             
+              except KeyboardInterrupt:
+                  print " Breaking off..."
                   pass
+          finally:
+              # Wait for subprocesses to finish
+              subp2.wait() # the other copy of ourselves
+              subp1.wait() # tail
+
+    else: # Something is piping to us (probably another copy of ourself)
+        #print "(Invoked with pipe; formatting stdin lines)"
+        print "Ignoring lines older than %d minutes  (assumes your timezone info is accurate)"%max_age_mins
+        print      
+        try:
+            stdin_forever()
+        except KeyboardInterrupt:
+            pass
             
