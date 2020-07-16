@@ -1,7 +1,7 @@
 watchapache
 ===========
 
-Tries to print a more skimmable version of apache logs.
+Tries to print a more skimmable version of apache logs coming from multiple vhosts.
 
 ![watchapache screenshot](/screenshot.png)
 
